@@ -99,7 +99,52 @@ class Dataset(torch.utils.data.Dataset):
             sample['image'] = self.test_mode(sample['image'])
         return sample
 
+class Dataset_test(torch.utils.data.Dataset):
+    """
+    dir_path : 데이터폴더 경로
+    meta_df : 가져올 데이터 csv
+    mode : 불러 올 데이터(train or test)
+    mix_up : mix_up augmentation 유무
+    reverse : reverse augmentation 유무
+    sub_data : emnist 로 만든 sub data 사용 유무
+    """
+    def __init__(self,
+                 files,
+                 label= 'cat3',
+                 img_size=224,
+                 pad=True,
+                 ):
+        
+        self.files = files
+        self.pad = pad
+        self.label = label
+        self.root = r'E:\관광'
+        self.test_mode = transforms.Compose([
+                        transforms.Resize((img_size,img_size)),
+                        transforms.ToTensor(),
+                        transforms.Normalize([0.485, 0.456, 0.406],[0.229, 0.224, 0.225])
+                            ])
 
+        # label encoder, decoder 
+        with open(os.path.join("endecoder", label), 'r') as rf:
+            coder = json.load(rf)
+            self.cat2en = coder['{:s}toen'.format(label)]
+            self.en2cat = coder['ento{:s}'.format(label)]
+        
+    def __len__(self):
+        return len(self.files)
+    
+    def __getitem__(self, index):
+        data = self.files.iloc[index, ]
+
+        image = Image.open(os.path.join(self.root, data.img_path)).convert('RGB')
+        sample = {'image': image}
+
+        if self.pad:
+            sample['image'] = expand2square(sample['image'])
+        sample['image'] = self.test_mode(sample['image'])
+        return sample
+    
 class UnNormalize(object):
     """
     정규화 inverse 한다.
