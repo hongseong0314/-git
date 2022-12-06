@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import os
 from random import choice
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import StratifiedKFold
 from torchvision import transforms
 from tqdm import tqdm
 from glob import glob
@@ -16,6 +16,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.cuda.amp import autocast, grad_scaler
 from sklearn.model_selection import train_test_split
+import torch.nn.functional as F
 import torch.nn.functional as F
 
 class Trainer():
@@ -30,25 +31,27 @@ class Trainer():
         # model setup
         self.model = self.get_model(model=self.args.model_class, pretrained=self.args.pretrained)
         self.model.to(self.device)
-
+        self.samples_per_cls  = self.df[self.args.label].value_counts().tolist()
 
         # 옵티마이저 정의
         if self.args.optimizer == 'adam':
             self.optimizer = torch.optim.Adam(self.model.parameters(),lr = self.args.lr)
         elif self.args.optimizer == 'Lamb':
             self.optimizer = optim.Lamb(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.weight_decay)                                      
+        elif self.args.optimizer == 'adamw':
+            self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.weight_decay)                                      
         elif self.args.optimizer == 'SAM':
             base_optimizer = torch.optim.SGD  
             self.optimizer = SAM(self.model.parameters(), base_optimizer, lr=self.args.lr, momentum=0.9)
 
-        # Loss 함수 정의
-        if self.args.weight is not None:
-            weights = torch.FloatTensor(self.args.weight).to(self.device)
-            self.criterion = WeightedFocalLoss(weights=weights)
-            # self.criterion = torch.nn.CrossEntropyLoss(weight=weights).to(self.device)
-        else:
-            self.criterion = WeightedFocalLoss(weights=weights)
-            # self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
+        # # Loss 함수 정의
+        # if self.args.weight is not None:
+        #     weights = torch.FloatTensor(self.args.weight).to(self.device)
+        #     # self.criterion = WeightedFocalLoss(weights=weights)
+        #     self.criterion = torch.nn.CrossEntropyLoss(weight=weights).to(self.device)
+        # else:
+        #     # self.criterion = WeightedFocalLoss(weights=weights)
+        #     self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
 
         self.early_stopping = EarlyStopping(patience=self.args.patience, verbose = True, path='cp.pth')
         
@@ -91,7 +94,7 @@ class Trainer():
                     valid_losses, label_list, pred_list = self.validing(valid_data_loader, epoch)
                     valid_acc = accuracy_score(np.array(label_list), np.array(pred_list))
                     valid_f1 = f1_score(np.array(label_list), np.array(pred_list), average='macro')
-                    print("epoch:{}, acc:{}, f1:{}".format(epoch, valid_acc, valid_f1))
+                    print("epoch:{}, acc:{}, f1:{}, loss:{}".format(epoch, valid_acc, valid_f1, np.average(valid_losses)))
 
                     self.early_stopping(np.average(valid_losses), self.model)
 
@@ -102,7 +105,6 @@ class Trainer():
                         
                         # model_name_bagging_kfold_bestmodel_valid loss로 이름 지정
                         best_model_name = self.args.save_dict + "/model_{}_{}_{:.4f}.pth".format(self.args.CODER, b, best_loss)
-                        # torch.save(self.model.state_dict(), best_model_name)
                         
                         if isinstance(self.model, torch.nn.DataParallel): 
                             torch.save(self.model.module.state_dict(), best_model_name) 
@@ -121,7 +123,7 @@ class Trainer():
         
             else:
                 self.kfold = StratifiedKFold(n_splits=self.args.fold_num, shuffle=True)
-                for fold_index, (trn_idx, val_idx) in enumerate(self.kfold.split(self.df, y=self.df['disease']),1):
+                for fold_index, (trn_idx, val_idx) in enumerate(self.kfold.split(self.df, y=self.df[self.args.label]),1):
                     self.train = self.df.iloc[trn_idx,]
                     self.valid  = self.df.iloc[val_idx,]
                     self.setup()
@@ -227,11 +229,20 @@ class Trainer():
                     self.warmup_scheduler.step()
 
                 with torch.set_grad_enabled(True):
-                    self.model.zero_grad(set_to_none=True)
                     if self.args.amp:
+                        self.model.zero_grad(set_to_none=True)
+                        
                         with autocast():
                             model_pred  = self.model(images) 
-                            loss = self.criterion(model_pred, labels)
+                            loss = CB_loss(labels, 
+                                            model_pred, 
+                                            self.samples_per_cls, 
+                                            self.args.output_dim,
+                                            self.args.loss_type, 
+                                            self.args.beta, 
+                                            self.args.gamma)
+
+                            # loss = self.criterion(model_pred, labels)
                         self.scaler.scale(loss).backward()
 
                         # Gradient Clipping
@@ -243,17 +254,33 @@ class Trainer():
                         self.scaler.update()
 
                     else:
+                        self.model.zero_grad(set_to_none=True)
                         model_pred  = self.model(images) 
-                        loss = self.criterion(model_pred, labels)
+                        # loss = self.criterion(model_pred, labels)
+                        loss = CB_loss(labels, 
+                                            model_pred, 
+                                            self.samples_per_cls, 
+                                            self.args.output_dim,
+                                            self.args.loss_type, 
+                                            self.args.beta, 
+                                            self.args.gamma)
                         loss.backward()
+                        
                         if self.args.clipping is not None:
                             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clipping)
+                        
                         if self.args.optimizer == 'SAM':
                             # sam optimizer first_steop
                             self.optimizer.first_step(zero_grad=True)
-                            
-                            # sam optimizer second_steop
-                            self.criterion(self.model(images), labels).backward()
+                            # # sam optimizer second_steop
+                            CB_loss(labels, 
+                                    self.model(images), 
+                                    self.samples_per_cls, 
+                                    self.args.output_dim,
+                                    self.args.loss_type, 
+                                    self.args.beta, 
+                                    self.args.gamma).backward()
+                            # self.criterion(self.model(images), labels).backward()
                             self.optimizer.second_step(zero_grad=True)
                         else:
                             self.optimizer.step()
@@ -292,7 +319,14 @@ class Trainer():
                     model_pred  = self.model(images) 
                     
                     # loss 계산
-                    valid_loss = self.criterion(model_pred, labels)
+                    # valid_loss = self.criterion(model_pred, labels)
+                    valid_loss = CB_loss(labels, 
+                                            model_pred, 
+                                            self.samples_per_cls, 
+                                            self.args.output_dim,
+                                            self.args.loss_type, 
+                                            self.args.beta, 
+                                            self.args.gamma)
 
                     model_pred = torch.argmax(model_pred, dim=1).detach().cpu()
                     labels =labels.detach().cpu()
@@ -409,6 +443,46 @@ class WeightedFocalLoss(torch.nn.Module):
         F_loss = self.weights[targets]*(1-pt)**self.gamma * BCE_loss
 
         return F_loss.mean()
+
+def focal_loss(labels, logits, alpha, gamma):
+    BCLoss = F.binary_cross_entropy_with_logits(input = logits, target = labels,reduction = "none")
+
+    if gamma == 0.0:
+        modulator = 1.0
+    else:
+        modulator = torch.exp(-gamma * labels * logits - gamma * torch.log(1 + 
+            torch.exp(-1.0 * logits)))
+
+    loss = modulator * BCLoss
+
+    weighted_loss = alpha * loss
+    focal_loss = torch.sum(weighted_loss)
+
+    focal_loss /= torch.sum(labels)
+    return focal_loss
+
+def CB_loss(labels, logits, samples_per_cls, no_of_classes, loss_type, beta, gamma):
+    effective_num = 1.0 - np.power(beta, samples_per_cls)
+    weights = (1.0 - beta) / np.array(effective_num)
+    weights = weights / np.sum(weights) * no_of_classes
+
+    labels_one_hot = F.one_hot(labels, no_of_classes).float()
+
+    weights = torch.tensor(weights).float()
+    weights = weights.unsqueeze(0)
+    weights = weights.repeat(labels_one_hot.shape[0],1).cuda() * labels_one_hot
+    weights = weights.sum(1)
+    weights = weights.unsqueeze(1)
+    weights = weights.repeat(1,no_of_classes)
+
+    if loss_type == "focal":
+        cb_loss = focal_loss(labels_one_hot, logits, weights, gamma)
+    elif loss_type == "sigmoid":
+        cb_loss = F.binary_cross_entropy_with_logits(input = logits,target = labels_one_hot, weights = weights)
+    elif loss_type == "softmax":
+        pred = logits.softmax(dim = 1)
+        cb_loss = F.binary_cross_entropy(input = pred, target = labels_one_hot, weight = weights)
+    return cb_loss
 
 
 class SAM(torch.optim.Optimizer):
