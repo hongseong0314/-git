@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import json
+from src.utill import stable_softmax   
 
 def get_model(model, encoder_name, dim, pretrained=False):
     mdl = torch.nn.DataParallel(model(encoder_name, dim)) if False else model(encoder_name, dim)
@@ -16,6 +17,16 @@ def get_model(model, encoder_name, dim, pretrained=False):
         print("기학습 웨이트")
         mdl.load_state_dict(torch.load(pretrained))
         return mdl
+
+def condition_pdf(cat1_pred, cat3_pred, coder):
+    cat1_prob = stable_softmax(cat1_pred)
+    cat3_prob = stable_softmax(cat3_pred)
+    
+    for c1 in range(6):
+        condition = cat1_prob[..., c1]
+        cat3_prob[..., coder[str(c1)]] *= condition[..., np.newaxis]
+        
+    return np.argmax(cat3_prob, axis=-1)
 
 def tester(device, path:os.path, cat1=False, batch_size=16):
     dir_root = r'E:\관광'
@@ -76,19 +87,14 @@ def tester(device, path:os.path, cat1=False, batch_size=16):
         
         with open(os.path.join("endecoder", "cat1tocat3"), 'r') as rf:
             coder = json.load(rf)
-        
-        pred_label = []
-        for c1, c3 in zip(cat1_list, cat3_list):
-            c2c = coder[str(c1)]
-            max_idx = np.argmax(c3[c2c])
-            pred_label.append(c2c[max_idx])
-        submission.cat3 = pred_label
+
+        submission.cat3 = condition_pdf(cat1_list, cat3_list, coder)
         submission.cat3 = submission.cat3.apply(lambda x:en2cat[str(x)])
         save_name = os.path.join(dir_root, path.split("\\")[-2] + 'cat1.csv')
         submission.to_csv(save_name, index=False)
     
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
-    p1 = r"E:\관광\cat1_pool_h_224_adamw_focal\model_poolformer_m36_0_-0.6977.pth"
+    p1 = r"E:\관광\cat1_pool_h_224_adamw_c\model_poolformer_m36_0_-0.7047.pth"
     p3 = r"E:\관광\check\checkpoint1.pth"
     tester(device, path=p3, cat1=p1)
