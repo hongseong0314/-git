@@ -24,6 +24,84 @@ def expand2square(pil_img):
         result.paste(pil_img, ((height - width) // 2, 0))
         return result
 
+class ModalDataset(torch.utils.data.Dataset):
+    def __init__(self, 
+                files,
+                args,
+                mode='train', 
+                ):
+        self.files = files
+        self.pad = args.pad
+        self.mode = mode
+        self.label = args.label
+        self.root = args.dir_root
+        self.tokenizer = args.tokenizer
+        self.max_len = args.max_len
+        self.img_size = args.img_size
+        
+        self.train_mode = transforms.Compose([
+                    transforms.Resize((self.img_size,self.img_size)),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomVerticalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
+                            ])
+
+        self.test_mode = transforms.Compose([
+                        transforms.Resize((self.img_size,self.img_size)),
+                        transforms.ToTensor(),
+                        transforms.Normalize([0.485, 0.456, 0.406],[0.229, 0.224, 0.225])
+                            ])
+
+        # label encoder, decoder 
+        with open(os.path.join("endecoder", self.label), 'r') as rf:
+            coder = json.load(rf)
+            self.cat2en = coder['{:s}toen'.format(self.label)]
+            self.en2cat = coder['ento{:s}'.format(self.label)]
+            
+    def __len__(self):
+        return len(self.files)
+    
+    def __getitem__(self, index):
+        data = self.files.iloc[index, ]
+        text = str(data.overview)
+        labels = data[self.label]
+        labels = self.cat2en[labels]
+        
+        encoding = self.tokenizer.encode_plus(
+          text,
+          add_special_tokens=True,
+          max_length=self.max_len,
+          return_token_type_ids=False,
+          padding = 'max_length',
+          truncation = True,
+          return_attention_mask=True,
+          return_tensors='pt',
+        )
+        
+        image = Image.open(os.path.join(self.root, data.img_path)).convert('RGB')
+        if self.mode == 'train':
+            if self.pad:
+                image = expand2square(image)
+            try:
+                image = self.train_mode(image)
+            except TypeError:
+                print(data, image)
+
+        # test mode transform
+        elif self.mode == 'test' or self.mode == 'valid':
+            if self.pad:
+                image = expand2square(image)
+            image = self.test_mode(image)
+        
+        
+        return {
+          'input_ids': encoding['input_ids'].flatten(),
+          'attention_mask': encoding['attention_mask'].flatten(),
+          'image':image,
+          'labels': labels,
+        }
+
 class Dataset(torch.utils.data.Dataset):
     """
     dir_path : 데이터폴더 경로
@@ -33,25 +111,20 @@ class Dataset(torch.utils.data.Dataset):
     reverse : reverse augmentation 유무
     sub_data : emnist 로 만든 sub data 사용 유무
     """
-    def __init__(self,
-                 files,
+    def __init__(self,files,
+                args,
                  mode='train',
-                 label= 'cat3',
-                 img_size=224,
-                 pad=True,
                  ):
         
         self.files = files
-        self.pad = pad
+        self.pad = args.pad
         self.mode = mode
-        self.label = label
-        self.root = r'E:\관광'
+        self.label = args.label
+        self.root = args.dir_root
         self.train_mode = transforms.Compose([
-                    transforms.Resize((img_size,img_size)),
+                    transforms.Resize((args.img_size,args.img_size)),
                     transforms.RandomHorizontalFlip(),
                     transforms.RandomVerticalFlip(),
-                    # transforms.RandomRotation(90),
-                    # transforms.RandomAffine((20)),
                     transforms.ToTensor(),
                     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
                             ])
@@ -61,16 +134,16 @@ class Dataset(torch.utils.data.Dataset):
         
         """
         self.test_mode = transforms.Compose([
-                        transforms.Resize((img_size,img_size)),
+                        transforms.Resize((args.img_size,args.img_size)),
                         transforms.ToTensor(),
                         transforms.Normalize([0.485, 0.456, 0.406],[0.229, 0.224, 0.225])
                             ])
 
         # label encoder, decoder 
-        with open(os.path.join("endecoder", label), 'r') as rf:
+        with open(os.path.join("endecoder", args.label), 'r') as rf:
             coder = json.load(rf)
-            self.cat2en = coder['{:s}toen'.format(label)]
-            self.en2cat = coder['ento{:s}'.format(label)]
+            self.cat2en = coder['{:s}toen'.format(args.label)]
+            self.en2cat = coder['ento{:s}'.format(args.label)]
         
     def __len__(self):
         return len(self.files)

@@ -6,9 +6,12 @@ import numpy as np
 import torch
 from easydict import EasyDict
 
-from dataloader import Dataset
+from dataloader import Dataset, ModalDataset
 from src.model.meta import PoolFormer
+from src.model.text_model import TextModel
+from src.model.modal import Modal 
 from src.trainer import Trainer
+from transformers import AutoTokenizer
 
 save_path = os.getcwd()
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
@@ -24,59 +27,78 @@ weights_c3 = np.load("cat3.npy")
 
 args = EasyDict(
     {
-     # Path settings
-     'root':'train_dir',
-     'save_dict' : os.path.join(dir_root, 'cat1_pool_h_224_adamw_focal'),
-     'df':meta_df,
-     # Model parameter settings
-     'CODER':'poolformer_m36', # 'regnety_040', 'efficientnet-b0' ,poolformer_m36
-     'drop_path_rate':0.2,
-     'model_class': PoolFormer,
-     'weight':weights_c1,
-     'pretrained':False,#"E:\관광\cat3_pool_h_224_focal\model_poolformer_m36_0_0.0268.pth",
-     'freeze':False,
+    # Path settings
+    'root':'train_dir',
+    'dir_root':dir_root,
+    'save_dict' : os.path.join(dir_root, 'cat3_modal_c'),
+    'df':meta_df,
+     
+    # Model parameter settings
+    'drop_path_rate':0.2,
+    'model_class': Modal,
+    'weight':weights_c3,
+    'pretrained':False,#"E:\관광\cat3_pool_h_224_focal\model_poolformer_m36_0_0.0268.pth",
+    
+    ## modal settings
+    'hidden_dim':256,
+    'modal_path':False,
+    'img_path':r"E:\관광\check\image_weight.pth", #이미지 기학습
+    'text_path':r"E:\관광\model_save\klue_bert_cat3_model.pth", #텍스트 기학습
+    'atten_use':False,
+    'head_dim':64, #atten head dim
+    'modal_freeze':True, # image and text model freeze
 
-     # Training parameter settings
-     ## Base Parameter
-     'img_size':224,
-     'test_size':224,
-     'BATCH_SIZE':16,
-     'epochs':200,
-     'optimizer':'adamw', #adam,Lamb,SAM, adamw
-     'lr':4e-5,
-     'weight_decay':1e-3,
-     'Dataset' : Dataset,
-     'fold_num':1, 
-     'bagging_num':1,
-     'label':'cat1',
-     'loss_type':'focal',
-     'beta':0.9999,
-     'gamma':2.0,
+    ## image model
+    'img_model':PoolFormer,
+    'CODER':'poolformer_m36', # 'regnety_040', 'efficientnet-b0' ,poolformer_m36
+    'freeze':False,
+    'img_size':224,
+    'test_size':224,
 
-     ## Augmentation
-     'pad':True,
+    ## text model
+    'text_model':TextModel,
+    'tokenizer':AutoTokenizer.from_pretrained("klue/bert-base"),
+    'max_len':512,
 
-     #scheduler 
-     'scheduler':'cos', #cycle
-     ## Scheduler (OnecycleLR)
-     'warm_epoch':5,
-     'max_lr':1e-3,
+    # Training parameter settings
+    ## Base Parameter
+    'BATCH_SIZE':4,
+    'epochs':200,
+    'optimizer':'adamw', #adam,Lamb,SAM, adamw
+    'lr':5e-6,
+    'weight_decay':1e-3,
+    'Dataset' : ModalDataset,
+    'fold_num':1, 
+    'bagging_num':1,
+    'label':'cat3',
+    'loss_type':'focal',
+    'beta':0.9999,
+    'gamma':2.0,
 
-     ### Cosine Annealing
-     'min_lr':5e-6,
-     'tmax':145,
+    ## Augmentation
+    'pad':True,
 
-     ## etc.
-     'patience':20,
-     'clipping':None,
+    #scheduler 
+    'scheduler':'cos', #cycle
+    ## Scheduler (OnecycleLR)
+    'warm_epoch':5,
+    'max_lr':1e-3,
 
-     # Hardware settings
-     'amp':False,
-     'multi_gpu':False,
-     'logging':False,
-     'num_workers':4,
-     'seed':42,
-     'device':device,
+    ### Cosine Annealing
+    'min_lr':5e-6,
+    'tmax':145,
+
+    ## etc.
+    'patience':20,
+    'clipping':None,
+
+    # Hardware settings
+    'amp':False,
+    'multi_gpu':False,
+    'logging':False,
+    'num_workers':4,
+    'seed':42,
+    'device':device,
 
     })
 
@@ -93,5 +115,4 @@ if __name__ == '__main__':
     seed_everything(args.seed)
     print(args.CODER + " train..")
     trainer = Trainer(args)
-    # trainer = Mixup_trainer(args)
     trainer.fit()
