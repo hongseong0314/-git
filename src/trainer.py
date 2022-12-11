@@ -17,7 +17,6 @@ from torch.optim.lr_scheduler import _LRScheduler
 from torch.cuda.amp import autocast, grad_scaler
 from sklearn.model_selection import train_test_split
 import torch.nn.functional as F
-import torch.nn.functional as F
 
 class Trainer():
     def __init__(self, args):
@@ -44,14 +43,14 @@ class Trainer():
             base_optimizer = torch.optim.SGD  
             self.optimizer = SAM(self.model.parameters(), base_optimizer, lr=self.args.lr, momentum=0.9)
 
-        # # Loss 함수 정의
-        # if self.args.weight is not None:
-        #     weights = torch.FloatTensor(self.args.weight).to(self.device)
-        #     # self.criterion = WeightedFocalLoss(weights=weights)
-        #     self.criterion = torch.nn.CrossEntropyLoss(weight=weights).to(self.device)
-        # else:
-        #     # self.criterion = WeightedFocalLoss(weights=weights)
-        #     self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
+        # Loss 함수 정의
+        if self.args.weight is not None:
+            weights = torch.FloatTensor(self.args.weight).to(self.device)
+            # self.criterion = WeightedFocalLoss(weights=weights)
+            self.criterion = torch.nn.CrossEntropyLoss(weight=weights).to(self.device)
+        else:
+            # self.criterion = WeightedFocalLoss(weights=weights)
+            self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
 
         self.early_stopping = EarlyStopping(patience=self.args.patience, verbose = True, path='cp.pth')
         
@@ -99,6 +98,7 @@ class Trainer():
                     self.early_stopping(np.average(valid_losses), self.model)
 
                     # 모델 저장
+                    torch.save(self.model.state_dict(), "checkpoint.pth") 
                     if best_loss > np.average(valid_losses):
                         best_loss = np.average(valid_losses)
                         create_directory(self.args.save_dict)
@@ -185,21 +185,9 @@ class Trainer():
     def sampling(self):
         #Dataset 정의
         train_answer, valid_answer = self.train, self.valid
-        train_dataset = self.args.Dataset(
-                                            train_answer, 
-                                            mode='train', 
-                                            img_size = self.args.img_size, 
-                                            label= self.args.label,
-                                            pad=self.args.pad
-                                            )
+        train_dataset = self.args.Dataset(train_answer, self.args, mode='train')
         
-        valid_dataset = self.args.Dataset(
-                                            valid_answer, 
-                                            mode='test', 
-                                            img_size = self.args.test_size, 
-                                            label= self.args.label,
-                                            pad=self.args.pad
-                                            )
+        valid_dataset = self.args.Dataset(valid_answer, self.args,mode='valid')
         
         train_data_loader = DataLoader(
             train_dataset,
@@ -222,9 +210,10 @@ class Trainer():
         with tqdm(train_data_loader,total=train_data_loader.__len__(), unit="batch") as train_bar:
             for batch_idx, batch_data in enumerate(train_bar):
                 train_bar.set_description(f"Train Epoch {epoch}")
-                images, labels = batch_data['image'], batch_data['labels']
-                images, labels = Variable(images.cuda()), Variable(labels.cuda())
-
+                batch_data['input_ids'] = Variable(batch_data['input_ids'].cuda())
+                batch_data['attention_mask'] = Variable(batch_data['attention_mask'].cuda())
+                batch_data['image'] = Variable(batch_data['image'].cuda())
+                labels = Variable(batch_data['labels'].cuda())
                 if epoch <= self.args.warm_epoch:
                     self.warmup_scheduler.step()
 
@@ -233,16 +222,16 @@ class Trainer():
                         self.model.zero_grad(set_to_none=True)
                         
                         with autocast():
-                            model_pred  = self.model(images) 
-                            loss = CB_loss(labels, 
-                                            model_pred, 
-                                            self.samples_per_cls, 
-                                            self.args.output_dim,
-                                            self.args.loss_type, 
-                                            self.args.beta, 
-                                            self.args.gamma)
+                            model_pred  = self.model(batch_data) 
+                            # loss = CB_loss(labels, 
+                            #                 model_pred, 
+                            #                 self.samples_per_cls, 
+                            #                 self.args.output_dim,
+                            #                 self.args.loss_type, 
+                            #                 self.args.beta, 
+                            #                 self.args.gamma)
 
-                            # loss = self.criterion(model_pred, labels)
+                            loss = self.criterion(model_pred, labels)
                         self.scaler.scale(loss).backward()
 
                         # Gradient Clipping
@@ -255,15 +244,15 @@ class Trainer():
 
                     else:
                         self.model.zero_grad(set_to_none=True)
-                        model_pred  = self.model(images) 
-                        # loss = self.criterion(model_pred, labels)
-                        loss = CB_loss(labels, 
-                                            model_pred, 
-                                            self.samples_per_cls, 
-                                            self.args.output_dim,
-                                            self.args.loss_type, 
-                                            self.args.beta, 
-                                            self.args.gamma)
+                        model_pred  = self.model(batch_data) 
+                        loss = self.criterion(model_pred, labels)
+                        # loss = CB_loss(labels, 
+                        #                     model_pred, 
+                        #                     self.samples_per_cls, 
+                        #                     self.args.output_dim,
+                        #                     self.args.loss_type, 
+                        #                     self.args.beta, 
+                        #                     self.args.gamma)
                         loss.backward()
                         
                         if self.args.clipping is not None:
@@ -273,14 +262,14 @@ class Trainer():
                             # sam optimizer first_steop
                             self.optimizer.first_step(zero_grad=True)
                             # # sam optimizer second_steop
-                            CB_loss(labels, 
-                                    self.model(images), 
-                                    self.samples_per_cls, 
-                                    self.args.output_dim,
-                                    self.args.loss_type, 
-                                    self.args.beta, 
-                                    self.args.gamma).backward()
-                            # self.criterion(self.model(images), labels).backward()
+                            # CB_loss(labels, 
+                            #         self.model(images), 
+                            #         self.samples_per_cls, 
+                            #         self.args.output_dim,
+                            #         self.args.loss_type, 
+                            #         self.args.beta, 
+                            #         self.args.gamma).backward()
+                            self.criterion(self.model(batch_data), labels).backward()
                             self.optimizer.second_step(zero_grad=True)
                         else:
                             self.optimizer.step()
@@ -312,21 +301,23 @@ class Trainer():
         with tqdm(valid_data_loader,total=valid_data_loader.__len__(), unit="batch") as valid_bar:
             for batch_idx, batch_data in enumerate(valid_bar):
                 valid_bar.set_description(f"Valid Epoch {epoch}")
-                images, labels = batch_data['image'], batch_data['labels']
-                images, labels = Variable(images.cuda()), Variable(labels.cuda())
+                batch_data['input_ids'] = Variable(batch_data['input_ids'].cuda())
+                batch_data['attention_mask'] = Variable(batch_data['attention_mask'].cuda())
+                batch_data['image'] = Variable(batch_data['image'].cuda())
+                labels = Variable(batch_data['labels'].cuda())
 
                 with torch.no_grad():
-                    model_pred  = self.model(images) 
+                    model_pred  = self.model(batch_data) 
                     
                     # loss 계산
-                    # valid_loss = self.criterion(model_pred, labels)
-                    valid_loss = CB_loss(labels, 
-                                            model_pred, 
-                                            self.samples_per_cls, 
-                                            self.args.output_dim,
-                                            self.args.loss_type, 
-                                            self.args.beta, 
-                                            self.args.gamma)
+                    valid_loss = self.criterion(model_pred, labels)
+                    # valid_loss = CB_loss(labels, 
+                    #                         model_pred, 
+                    #                         self.samples_per_cls, 
+                    #                         self.args.output_dim,
+                    #                         self.args.loss_type, 
+                    #                         self.args.beta, 
+                    #                         self.args.gamma)
 
                     model_pred = torch.argmax(model_pred, dim=1).detach().cpu()
                     labels =labels.detach().cpu()

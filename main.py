@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from easydict import EasyDict
 
-from dataloader import Dataset, ModalDataset
+from dataloader import ModalDataset
 from src.model.meta import PoolFormer
 from src.model.text_model import TextModel
 from src.model.modal import Modal 
@@ -30,23 +30,24 @@ args = EasyDict(
     # Path settings
     'root':'train_dir',
     'dir_root':dir_root,
-    'save_dict' : os.path.join(dir_root, 'cat3_modal_c'),
+    'save_dict' : os.path.join(dir_root, 'cat1_modal_c'),
     'df':meta_df,
      
     # Model parameter settings
     'drop_path_rate':0.2,
     'model_class': Modal,
-    'weight':weights_c3,
+    'weight':weights_c1,
     'pretrained':False,#"E:\관광\cat3_pool_h_224_focal\model_poolformer_m36_0_0.0268.pth",
     
     ## modal settings
     'hidden_dim':256,
     'modal_path':False,
-    'img_path':r"E:\관광\check\image_weight.pth", #이미지 기학습
-    'text_path':r"E:\관광\model_save\klue_bert_cat3_model.pth", #텍스트 기학습
+    'img_path':r"E:\관광\cat1_pool_h_224_adamw_c\model_poolformer_m36_0_-0.7047.pth", #이미지 기학습
+    'text_path':r"E:\관광\model_save (2)\klue_bert_cat1_model.pth", #텍스트 기학습
     'atten_use':False,
     'head_dim':64, #atten head dim
     'modal_freeze':True, # image and text model freeze
+    'layer_num':2,
 
     ## image model
     'img_model':PoolFormer,
@@ -62,7 +63,7 @@ args = EasyDict(
 
     # Training parameter settings
     ## Base Parameter
-    'BATCH_SIZE':4,
+    'BATCH_SIZE':100,
     'epochs':200,
     'optimizer':'adamw', #adam,Lamb,SAM, adamw
     'lr':5e-6,
@@ -70,7 +71,7 @@ args = EasyDict(
     'Dataset' : ModalDataset,
     'fold_num':1, 
     'bagging_num':1,
-    'label':'cat3',
+    'label':'cat1',
     'loss_type':'focal',
     'beta':0.9999,
     'gamma':2.0,
@@ -99,20 +100,19 @@ args = EasyDict(
     'num_workers':4,
     'seed':42,
     'device':device,
-
     })
 
-def seed_everything(seed):
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+# def seed_everything(seed):
+#     random.seed(seed)
+#     os.environ["PYTHONHASHSEED"] = str(seed)
+#     np.random.seed(seed)
+#     torch.manual_seed(seed)
+#     torch.cuda.manual_seed(seed)
+#     torch.backends.cudnn.deterministic = True
+#     torch.backends.cudnn.benchmark = False
 
 if __name__ == '__main__': 
-    seed_everything(args.seed)
+    # seed_everything(args.seed)
     print(args.CODER + " train..")
     trainer = Trainer(args)
     trainer.fit()

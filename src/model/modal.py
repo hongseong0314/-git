@@ -94,6 +94,7 @@ class Modal(torch.nn.Module):
             self.attention1 = torch.nn.Sequential(*[AttentionLayer(self.args.hidden_dim * 2, 
                                                                self.args.head_dim, 
                                                                drop=args.drop_path_rate) for _ in range(args.layer_num)])
+        
         self.output = torch.nn.Linear(self.args.hidden_dim * 2, self.args.output_dim)
         
         # freeze
@@ -104,15 +105,13 @@ class Modal(torch.nn.Module):
                     param.requires_grad = False
             # text model
             for name, param in self.text_model.named_parameters():
-                if name not in list(self.text_model.state_dict().keys())[:-2]:
+                if name not in list(self.text_model.state_dict().keys())[-2:]:
                     param.requires_grad = False
-        
         pass
     
     def forward(self, x):
-        images, input_id, mask = x['image'], x['input_ids'], x['attention_mask']
-        x_img = self.img_model(images)
-        x_text = self.text_model(input_id, mask)
+        x_img = self.img_model(x['image'])
+        x_text = self.text_model(x)
         x_concat = torch.cat([x_text, x_img],1)
         if self.args.atten_use:
             x_concat = self.attention1(x_concat) 

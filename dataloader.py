@@ -1,12 +1,6 @@
-import re
 import os
-import random
-import cv2
-import numpy as np
-import pandas as pd
 from PIL import Image
 import torch
-from torch.utils.data.sampler import SubsetRandomSampler
 from torchvision import transforms
 import json
 
@@ -65,8 +59,6 @@ class ModalDataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         data = self.files.iloc[index, ]
         text = str(data.overview)
-        labels = data[self.label]
-        labels = self.cat2en[labels]
         
         encoding = self.tokenizer.encode_plus(
           text,
@@ -81,142 +73,42 @@ class ModalDataset(torch.utils.data.Dataset):
         
         image = Image.open(os.path.join(self.root, data.img_path)).convert('RGB')
         if self.mode == 'train':
+            labels = data[self.label]
+            labels = self.cat2en[labels]
             if self.pad:
                 image = expand2square(image)
             try:
                 image = self.train_mode(image)
             except TypeError:
                 print(data, image)
-
-        # test mode transform
-        elif self.mode == 'test' or self.mode == 'valid':
+            return {
+                  'input_ids': encoding['input_ids'].flatten(),
+                  'attention_mask': encoding['attention_mask'].flatten(),
+                  'image':image,
+                  'labels': labels,
+                }
+        elif self.mode == self.mode == 'valid':
+            labels = data[self.label]
+            labels = self.cat2en[labels]
             if self.pad:
                 image = expand2square(image)
             image = self.test_mode(image)
-        
-        
-        return {
-          'input_ids': encoding['input_ids'].flatten(),
-          'attention_mask': encoding['attention_mask'].flatten(),
-          'image':image,
-          'labels': labels,
-        }
-
-class Dataset(torch.utils.data.Dataset):
-    """
-    dir_path : 데이터폴더 경로
-    meta_df : 가져올 데이터 csv
-    mode : 불러 올 데이터(train or test)
-    mix_up : mix_up augmentation 유무
-    reverse : reverse augmentation 유무
-    sub_data : emnist 로 만든 sub data 사용 유무
-    """
-    def __init__(self,files,
-                args,
-                 mode='train',
-                 ):
-        
-        self.files = files
-        self.pad = args.pad
-        self.mode = mode
-        self.label = args.label
-        self.root = args.dir_root
-        self.train_mode = transforms.Compose([
-                    transforms.Resize((args.img_size,args.img_size)),
-                    transforms.RandomHorizontalFlip(),
-                    transforms.RandomVerticalFlip(),
-                    transforms.ToTensor(),
-                    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]) 
-                            ])
-        """
-        transforms.RandomAffine((20)),
-        transforms.RandomRotation(90),
-        
-        """
-        self.test_mode = transforms.Compose([
-                        transforms.Resize((args.img_size,args.img_size)),
-                        transforms.ToTensor(),
-                        transforms.Normalize([0.485, 0.456, 0.406],[0.229, 0.224, 0.225])
-                            ])
-
-        # label encoder, decoder 
-        with open(os.path.join("endecoder", args.label), 'r') as rf:
-            coder = json.load(rf)
-            self.cat2en = coder['{:s}toen'.format(args.label)]
-            self.en2cat = coder['ento{:s}'.format(args.label)]
-        
-    def __len__(self):
-        return len(self.files)
-    
-    def __getitem__(self, index):
-        data = self.files.iloc[index, ]
-        labels = data[self.label]
-        labels = self.cat2en[labels]
-
-        image = Image.open(os.path.join(self.root, data.img_path)).convert('RGB')
-        sample = {'image': image, 'labels':labels}
-
-        # train mode transform
-        if self.mode == 'train':
+            return {
+                  'input_ids': encoding['input_ids'].flatten(),
+                  'attention_mask': encoding['attention_mask'].flatten(),
+                  'image':image,
+                  'labels':labels,
+                }
+            
+        elif self.mode == 'test':
             if self.pad:
-                sample['image'] = expand2square(sample['image'])
-            try:
-                sample['image'] = self.train_mode(sample['image'])
-            except TypeError:
-                print(data, sample['image'])
-
-        # test mode transform
-        elif self.mode == 'test' or self.mode == 'valid':
-            if self.pad:
-                sample['image'] = expand2square(sample['image'])
-            sample['image'] = self.test_mode(sample['image'])
-        return sample
-
-class Dataset_test(torch.utils.data.Dataset):
-    """
-    dir_path : 데이터폴더 경로
-    meta_df : 가져올 데이터 csv
-    mode : 불러 올 데이터(train or test)
-    mix_up : mix_up augmentation 유무
-    reverse : reverse augmentation 유무
-    sub_data : emnist 로 만든 sub data 사용 유무
-    """
-    def __init__(self,
-                 files,
-                 label= 'cat3',
-                 img_size=224,
-                 pad=True,
-                 ):
-        
-        self.files = files
-        self.pad = pad
-        self.label = label
-        self.root = r'E:\관광'
-        self.test_mode = transforms.Compose([
-                        transforms.Resize((img_size,img_size)),
-                        transforms.ToTensor(),
-                        transforms.Normalize([0.485, 0.456, 0.406],[0.229, 0.224, 0.225])
-                            ])
-
-        # label encoder, decoder 
-        with open(os.path.join("endecoder", label), 'r') as rf:
-            coder = json.load(rf)
-            self.cat2en = coder['{:s}toen'.format(label)]
-            self.en2cat = coder['ento{:s}'.format(label)]
-        
-    def __len__(self):
-        return len(self.files)
-    
-    def __getitem__(self, index):
-        data = self.files.iloc[index, ]
-
-        image = Image.open(os.path.join(self.root, data.img_path)).convert('RGB')
-        sample = {'image': image}
-
-        if self.pad:
-            sample['image'] = expand2square(sample['image'])
-        sample['image'] = self.test_mode(sample['image'])
-        return sample
+                image = expand2square(image)
+            image = self.test_mode(image)
+            return {
+                  'input_ids': encoding['input_ids'].flatten(),
+                  'attention_mask': encoding['attention_mask'].flatten(),
+                  'image':image,
+                }
     
 class UnNormalize(object):
     """

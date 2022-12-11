@@ -1,16 +1,15 @@
 import torch
-from src.model.meta import PoolFormer_test
 import os
 import pandas as pd
-from dataloader import Dataset_test
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import json
-from src.utill import stable_softmax   
+from src.utill import stable_softmax  
+from config import config
 
-def get_model(model, encoder_name, dim, pretrained=False):
-    mdl = torch.nn.DataParallel(model(encoder_name, dim)) if False else model(encoder_name, dim)
+def get_model(model, args, pretrained=False):
+    mdl = torch.nn.DataParallel(model(args)) if args.multi_gpu else model(args)
     if not pretrained:
         return mdl
     else:
@@ -28,26 +27,29 @@ def condition_pdf(cat1_pred, cat3_pred, coder):
         
     return np.argmax(cat3_prob, axis=-1)
 
-def tester(device, path:os.path, cat1=False, batch_size=16):
+def tester(args, path:os.path, cat1=False):
     dir_root = r'E:\관광'
+    args.dir_root = dir_root
     df_test = pd.read_csv(dir_root + '/test.csv')
-    test_datasetcat3 = Dataset_test(df_test, "cat3", 224)
+    test_datasetcat3 = args.Dataset(df_test, args, mode='test')
     cat3_loader = DataLoader(
             test_datasetcat3,
-            batch_size = batch_size,
+            batch_size = args.batch_size,
             shuffle = False,
         )
 
-    model3 = get_model(PoolFormer_test, "poolformer_m36",128, path)
-    model3.to(device)
+    model3 = get_model(args.model_class, args, path)
+    model3.to(args.device)
     model3.eval()
 
     cat3_list = []
     for batch_data in tqdm(cat3_loader):
-        images = batch_data['image']
-        images = images.to(device)
+        batch_data['input_ids'] = batch_data['input_ids'].to(args.device)
+        batch_data['attention_mask'] = batch_data['attention_mask'].to(args.device)
+        batch_data['image'] = batch_data['image'].to(args.device)
+                
         with torch.no_grad():
-            model_pred  = model3(images) 
+            model_pred  = model3(batch_data) 
             cat3_list.extend(model_pred.detach().cpu().numpy())
     cat3_list = np.vstack(cat3_list)
     
@@ -64,23 +66,26 @@ def tester(device, path:os.path, cat1=False, batch_size=16):
         submission.to_csv(save_name, index=False)
 
     else:
-        test_datasetcat1 = Dataset_test(df_test, "cat1", 224)
+        args.output_dim = 6
+        args.label = 'cat1'
+        test_datasetcat1 = args.Dataset(df_test, args, mode='test')
         cat1_loader  = DataLoader(
             test_datasetcat1,
-            batch_size = batch_size,
+            batch_size = args.batch_size,
             shuffle = False,
         )
-
-        model1 = get_model(PoolFormer_test, "poolformer_m36", 6, cat1)
+        model1 = get_model(args.model_class, args, cat1)
         model1.to(device)
         model1.eval()
 
         cat1_list = []
         for batch_data in tqdm(cat1_loader):
-            images = batch_data['image']
-            images = images.to(device)
+            batch_data['input_ids'] = batch_data['input_ids'].to(args.device)
+            batch_data['attention_mask'] = batch_data['attention_mask'].to(args.device)
+            batch_data['image'] = batch_data['image'].to(args.device)
+
             with torch.no_grad():
-                model_pred  = model1(images)
+                model_pred  = model1(batch_data)
 
                 model_pred = torch.argmax(model_pred, dim=1).detach().cpu()
                 cat1_list.extend(model_pred.numpy())
@@ -92,9 +97,13 @@ def tester(device, path:os.path, cat1=False, batch_size=16):
         submission.cat3 = submission.cat3.apply(lambda x:en2cat[str(x)])
         save_name = os.path.join(dir_root, path.split("\\")[-2] + 'cat1.csv')
         submission.to_csv(save_name, index=False)
-    
+
 if __name__ == '__main__':
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") 
-    p1 = r"E:\관광\cat1_pool_h_224_adamw_c\model_poolformer_m36_0_-0.7047.pth"
-    p3 = r"E:\관광\check\checkpoint1.pth"
-    tester(device, path=p3, cat1=p1)
+    p1 = r"E:\관광\cat1_modal_c\model_poolformer_m36_0_-0.9882.pth"
+    p3 = r"E:\관광\cat3_modal_c\model_poolformer_m36_0_-0.8934.pth"
+    args = config()
+    args.device = device
+    args.batch_size = 64
+
+    tester(args, path=p3, cat1=p1)

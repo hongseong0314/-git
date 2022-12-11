@@ -8,7 +8,8 @@ class TextModel(torch.nn.Module):
         self.dropout = torch.nn.Dropout(args.drop_path_rate)
         self.linear = torch.nn.Linear(768, args.output_dim)
 
-    def forward(self, input_id, mask):
+    def forward(self, x):
+        input_id, mask = x['input_ids'], x['attention_mask']
         _, pooled_output = self.bert(input_ids=input_id, 
                                     attention_mask=mask,
                                     return_dict=False)
